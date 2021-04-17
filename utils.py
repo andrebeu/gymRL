@@ -15,8 +15,11 @@ Experience = namedtuple('Experience',[
 
 
 def unpack_expL(expLoD):
-    """ given list of exp (namedtups)
-    return dict of np.arrs
+    """ 
+    given list of experience (namedtups)
+        expLoD [{t,s,a,r,sp}_t]
+    return dict of np.arrs 
+        exp {s:[],a:[],r:[],sp:[]}
     """
     expDoL = Experience(*zip(*expLoD))._asdict()
     return {k:np.array(v) for k,v in expDoL.items()}
@@ -75,7 +78,7 @@ class Buffer():
     """ deque with record and sample method
     """
 
-    def __init__(self,size=1000):
+    def __init__(self,size=100):
         """ buffer is list of dicts
         """
         self.buff_size = size
@@ -97,7 +100,7 @@ class Buffer():
         self.bufferL.extend(episode)
         return None
 
-    def sample(self,mode,nsamples=1000):
+    def sample(self,mode,nsamples=10):
         """ sample experience {t,s,a,r,sp} 
         from the bufferL of exp
         return sampleL 
@@ -106,9 +109,10 @@ class Buffer():
         if mode == 'online': 
             exp_set = list(self.bufferL)
         # only consider recent steps
-        elif mode == 'last': 
-            exp_set = list(self.bufferL)[-nsamples:]
+        elif mode == 'episodic': 
+            exp_set = list(self.bufferL)[-self.eplen:]
         # sample from exp_set; bottlneck
+        nsamples = self.eplen
         exp_samples = [exp_set[s] for s in \
             np.random.choice(
                 np.arange(len(exp_set)),
