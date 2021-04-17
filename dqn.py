@@ -28,6 +28,7 @@ class Task():
             openai gym control tasks 
         """
         self.env = env = gym.make(task_name)
+        self.env.seed(0)
         # used for default random policy
         self.aspace = self.env.action_space.n
 
@@ -45,7 +46,7 @@ class Task():
         done = False
         tstep = 0
         env_out = self.env.step(0) # arbitrary a0
-        sp_t,rt,done,extra = env_out
+        sp_t,r_t,done,extra = env_out
         # init ep obj for collecting data
         episode = []
         while not done:
@@ -54,10 +55,10 @@ class Task():
             # sample a_t, observe transition
             a_t = policy_fn(s_t)
             env_out_t = self.env.step(a_t)
-            sp_t,rt,done,extra = env_out_t
+            sp_t,r_t,done,extra = env_out_t
             # collect transition 
             episode.append(
-                Experience(tstep,s_t,a_t,rt,sp_t)
+                Experience(tstep,s_t,a_t,r_t,sp_t)
             )
             # verify if done
             if tstep==max_ep_len:
@@ -110,11 +111,11 @@ class DQN(tr.nn.Module):
     def __init__(self):
         super().__init__()
         self.indim = 4 # 4 obs + 1 action
-        self.stsize = 48
+        self.stsize = 20
         self.outdim = 2 # num actions
         self.build()
         self.lossop = tr.nn.SmoothL1Loss()
-        self.optiop = tr.optim.RMSprop(self.parameters(),lr=0.001)
+        self.optiop = tr.optim.Adam(self.parameters(),lr=0.001)
         self.gamma=0.98
 
     def build(self):
@@ -142,7 +143,7 @@ class DQN(tr.nn.Module):
 
     def qlearn_loss(self,exp):
         """ 
-        exp is dict of arrs
+        exp is dict of arrs 
             {state,action,reward,state_tp1}
         """
         st = exp['state']
@@ -158,7 +159,8 @@ class DQN(tr.nn.Module):
         # discount
         ytarget = tr.Tensor(rt) + self.gamma*q_stp1_max_ap
         # final target = reward
-        ytarget[-1] = rt[-1] 
+        ytarget[-1] = 0
+        # print(ytarget,rt)
         # yhat = qvalue of selected actions
         yhat = q_st_at = np.take_along_axis(q_st,at[:,None],axis=1)
         ## episode loss
@@ -176,4 +178,11 @@ class DQN(tr.nn.Module):
         self.optiop.step()
         return None
 
+    def argmax_policy_fn(self,epsilon):
+        """ lambda handle for softmax policy
+        """
 
+        if np.random.random() > epsilon:
+            return lambda x: np.random.randint(2)
+        else:
+            return lambda x: self.forward(x).argmax().detach().numpy()
