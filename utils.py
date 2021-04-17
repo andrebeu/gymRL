@@ -6,6 +6,8 @@ import torch as tr
 import gym
 import numpy as np
 
+REWARD = [0,1,-1]
+
 # container 
 Experience = namedtuple('Experience',[
     'tstep','state','action','reward','state_tp1'
@@ -23,38 +25,40 @@ def unpack_expL(expLoD):
 
 class Task():
 
-    def __init__(self,task_name='CartPole-v1'):
+    def __init__(self,task_name='CartPole-v1',env_seed=0):
         """ wrapper for interacting with 
             openai gym control tasks 
         """
         self.env = env = gym.make(task_name)
-        self.env.seed(0)
+        self.env.seed(env_seed)
         # used for default random policy
         self.aspace = self.env.action_space.n
+        self.rand_policy = lambda x: np.random.randint(self.aspace)
 
-    def play(self,policy_fn=None,max_ep_len=1000):
+    def play_ep(self,policy_fn=None,max_ep_len=1000):
         """ 
         given policy, return trajectory
             pi(s_t) -> a_t
         returns episode_exp = {st:[],at:[],rt:[],spt:[]}
         """        
+        # config env
         self.env.reset()
-        # random policy
         if type(policy_fn)==type(None):
-            policy_fn = lambda x: np.random.randint(self.aspace)
+            policy_fn = self.rand_policy
         # init loop vars
         done = False
         tstep = 0
-        env_out = self.env.step(0) # arbitrary a0
+        env_out = self.env.step(0) 
         sp_t,r_t,done,extra = env_out
-        # init ep obj for collecting data
         episode = []
+        # episode loop
         while not done:
             tstep += 1 
             s_t = sp_t
             # sample a_t, observe transition
             a_t = policy_fn(s_t)
             env_out_t = self.env.step(a_t)
+            # preprocessing from Mnih d.t. apply
             sp_t,r_t,done,extra = env_out_t
             # collect transition 
             episode.append(
@@ -71,7 +75,7 @@ class Buffer():
     """ deque with record and sample method
     """
 
-    def __init__(self,size=10000):
+    def __init__(self,size=1000):
         """ buffer is list of dicts
         """
         self.buff_size = size
@@ -79,29 +83,37 @@ class Buffer():
         return None
 
     def reset_buff(self):
-        self.buffer = collections.deque(maxlen=self.buff_size)
+        self.bufferL = collections.deque(maxlen=1000)
         return None
 
     def record(self,episode,verb=False):
-        """ record episode
-        append list of experiences to buffer
+        """ 
+        record episodeL of experiences
+        extend in bufferL
         """
+        # print('record',len(episode))
+        # print(episode)
         self.eplen = len(episode)
-        self.buffer.extend(episode)
+        self.bufferL.extend(episode)
         return None
 
-    def sample(self,mode='rand',nsamples=64):
-        """ sample exp from the buffer
-        return 
+    def sample(self,mode,nsamples=1000):
+        """ sample experience {t,s,a,r,sp} 
+        from the bufferL of exp
+        return sampleL 
         """
-        # consider all samples in buffer
-        if mode == 'rand': 
-            exp = self.buffer
-        # only consider last episode
-        elif mode == 'ep': 
-            exp = list(self.buffer)[-self.eplen:]
-        # return dict of array 
-        exp_samples = np.random.choice(exp,nsamples)
+        # consider all samples in bufferL
+        if mode == 'online': 
+            exp_set = list(self.bufferL)
+        # only consider recent steps
+        elif mode == 'last': 
+            exp_set = list(self.bufferL)[-nsamples:]
+        # sample from exp_set; bottlneck
+        exp_samples = [exp_set[s] for s in \
+            np.random.choice(
+                np.arange(len(exp_set)),
+                nsamples
+            )]
         return exp_samples
 
 
