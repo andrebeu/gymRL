@@ -14,18 +14,6 @@ Experience = namedtuple('Experience',[
 ])
 
 
-def unpack_expL(expLoD):
-    """ 
-    given list of experience (namedtups)
-        expLoD [{t,s,a,r,sp}_t]
-    return dict of np.arrs 
-        exp {s:[],a:[],r:[],sp:[]}
-    """
-    expDoL = Experience(*zip(*expLoD))._asdict()
-    return {k:np.array(v) for k,v in expDoL.items()}
-
-
-
 class Task():
 
     def __init__(self,task_name='CartPole-v1',env_seed=0):
@@ -112,7 +100,7 @@ class Buffer():
         elif mode == 'episodic': 
             exp_set = list(self.bufferL)[-self.eplen:]
         # sample from exp_set; bottlneck
-        nsamples = self.eplen
+        nsamples = self.eplen # controls
         exp_samples = [exp_set[s] for s in \
             np.random.choice(
                 np.arange(len(exp_set)),
@@ -202,3 +190,16 @@ class DQN(tr.nn.Module):
             return lambda x: np.random.randint(2)
         else:
             return lambda x: self.forward(x).argmax().detach().numpy()
+
+
+
+def unpack_expL(expLoD):
+    """ 
+    given list of experience (namedtups)
+        expLoD [{t,s,a,r,sp}_t]
+    return dict of np.arrs 
+        exp {s:[],a:[],r:[],sp:[]}
+    """
+    expDoL = Experience(*zip(*expLoD))._asdict()
+    return {k:np.array(v) for k,v in expDoL.items()}
+
