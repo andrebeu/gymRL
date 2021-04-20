@@ -16,7 +16,7 @@ Experience = namedtuple('Experience',[
 
 class Task():
 
-    def __init__(self,task_name='CartPole-v1',env_seed=0):
+    def __init__(self,task_name='CartPole-v1',env_seed=0,max_ep_len=100):
         """ wrapper for interacting with 
             openai gym control tasks 
         """
@@ -25,8 +25,9 @@ class Task():
         # used for default random policy
         self.aspace = self.env.action_space.n
         self.rand_policy = lambda x: np.random.randint(self.aspace)
+        self.max_ep_len = max_ep_len 
 
-    def play_ep(self,policy_fn=None,max_ep_len=1000):
+    def play_ep(self,policy_fn=None):
         """ 
         given policy, return trajectory
             pi(s_t) -> a_t
@@ -56,7 +57,7 @@ class Task():
                 Experience(tstep,s_t,a_t,r_t,sp_t)
             )
             # verify if done
-            if tstep==max_ep_len:
+            if tstep==self.max_ep_len:
                 done=True
         return episode
 
@@ -66,15 +67,16 @@ class Buffer():
     """ deque with record and sample method
     """
 
-    def __init__(self,size=100):
+    def __init__(self,mode,size):
         """ buffer is list of dicts
         """
-        self.buff_size = size
+        self.size = size
+        self.mode = mode
         self.reset_buff()
         return None
 
     def reset_buff(self):
-        self.bufferL = collections.deque(maxlen=1000)
+        self.bufferL = collections.deque(maxlen=self.size)
         return None
 
     def record(self,episode,verb=False):
@@ -88,23 +90,23 @@ class Buffer():
         self.bufferL.extend(episode)
         return None
 
-    def sample(self,mode,nsamples=10):
+    def sample(self,batch_size):
         """ sample experience {t,s,a,r,sp} 
         from the bufferL of exp
         return sampleL 
         """
         # consider all samples in bufferL
-        if mode == 'online': 
+        if self.mode == 'online': 
             exp_set = list(self.bufferL)
         # only consider recent steps
-        elif mode == 'episodic': 
+        elif self.mode == 'episodic': 
             exp_set = list(self.bufferL)[-self.eplen:]
         # sample from exp_set; bottlneck
-        nsamples = self.eplen # controls
+        batch_size = self.eplen # controls
         exp_samples = [exp_set[s] for s in \
             np.random.choice(
                 np.arange(len(exp_set)),
-                nsamples
+                batch_size
             )]
         return exp_samples
 
