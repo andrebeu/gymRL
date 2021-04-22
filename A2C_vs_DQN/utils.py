@@ -195,6 +195,97 @@ class DQN(tr.nn.Module):
 
 
 
+class PolValNet(tr.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.indim = 4 # 4 obs + 1 action
+        self.stsize = 20
+        self.num_actions = 2 # num actions
+        self.vhead_outdim = 1
+        self.build()
+        # 
+        self.optiop = tr.optim.Adam(self.parameters(),lr=0.001)
+        self.gamma=0.96
+
+    def build(self):
+        self.ff1 = tr.nn.Linear(self.indim,self.stsize)
+        self.ff2 = tr.nn.Linear(self.stsize,self.stsize)
+        self.ff3 = tr.nn.Linear(self.stsize,self.stsize)
+        # self.gru = tr.nn.GRU(self.stsize,self.stsize)
+        # self.init_rnn = tr.nn.Parameter(tr.rand(2,1,1,self.stsize),requires_grad=True)
+        self.value_head = tr.nn.Linear(self.stsize,self.vhead_outdim)
+        self.policy_head = tr.nn.Linear(self.stsize,self.num_actions)
+
+    def forward(self,obs):
+        """ 
+        takes batch of observations
+            obs : arr[batch,sfeat]
+        returns value of each action
+            value_hat_t : arr[batch,1]
+            pi_t : arr[batch,num_actions]
+        """
+        hid_act = tr.Tensor(obs)
+        # hid_act = obs_t
+        hid_act = self.ff1(hid_act)
+        hid_act = self.ff2(hid_act).relu()
+        hid_act = self.ff3(hid_act).relu()
+        value_act = self.value_head(hid_act)
+        policy_act = self.policy_head(hid_act)
+        return value_act,policy_act  
+
+    def reinforce_loss(self,exp):
+        """ format reinforce loss 
+        L = L_v + L_pi
+        L_v = MSE(G_t,vhat)
+        L_pi = sum_i [ log(pi(a_t)) * (G_t-vhat) ]
+        ** returns computed internally, so assume 
+        ** sequence of rewards preserve time structure
+        """
+        st = exp['state']
+        at = exp['action']
+        rewards = exp['reward']
+        stp1 = exp['state_tp1']
+        # forward prop: [nsamples,outdim]
+        vhatT,piT = self.forward()
+        ## compute returns [nsamples]
+        returnsT = compute_returns(rewards)
+        ## value loss [nsamples]
+        L_value = tr.sum(tr.square(returnsT-vhatT))
+        ## policy loss log(pi(a))
+        pi_stat = np.take_along_axis(piT,at[:,None],axis=1)
+        log_pi_stat = np.log(pi_stat)
+        L_policy = log_pi_stat*L_value
+        ## 
+        batch_loss = L_value+L_policy
+        return batch_loss
+
+    def train(self,exp):
+        """ 
+        exp is dict of arrs
+            {state,action,reward,state_tp1}
+        """
+        self.optiop.zero_grad()
+        loss = self.reinforce_loss(exp)
+        loss.backward()
+        self.optiop.step()
+        return None
+
+    def softmax_policy_fn(self,epsilon):
+        """ lambda handle for softmax policy
+        """
+        if np.random.random() > epsilon:
+            return lambda x: np.random.randint(2)
+        else:
+            def policy(x):
+                val,pi = self.forward(x)
+                pr_a = pi.softmax(-1)  
+                a_t = np.random.choice([0,1],p=pr_a.detach().numpy())
+                return a_t
+            return lambda x: policy(x)
+
+
+
 def unpack_expL(expLoD):
     """ 
     given list of experience (namedtups)
@@ -204,4 +295,25 @@ def unpack_expL(expLoD):
     """
     expDoL = Experience(*zip(*expLoD))._asdict()
     return {k:np.array(v) for k,v in expDoL.items()}
+
+def compute_returns(rewards,gamma=0.9):
+    """ 
+    given rewards, compute discounted return
+    G_t = sum_k [g^k * r(t+k)]; k=0...T-t
+    """ 
+    T = len(rewards) 
+    ## explicit
+    # print(1)
+    # returns = np.ones(T)
+    # for t in np.arange(T):
+    #     discounts = np.array([gamma**k for k in np.arange(T-t)])
+    #     returns[t] = np.sum(rewards[t:] * discounts)
+    ## ugly but order magnitude faster
+    returns = np.array([
+        np.sum(np.array(
+            rewards[t:])*np.array(
+            [gamma**i for i in range(T-t)]
+        )) for t in range(T)
+    ])
+    return returns
 
