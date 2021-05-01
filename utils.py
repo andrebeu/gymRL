@@ -226,7 +226,7 @@ def unpack_expL(expLoD):
 
 class REINFORCE(tr.nn.Module):
   
-    def __init__(self,indim=4,nactions=2,stsize=20,learnrate=0.05):
+    def __init__(self,indim=4,nactions=2,stsize=18,learnrate=0.005):
         super().__init__()
         self.indim = indim
         self.stsize = stsize
@@ -236,12 +236,13 @@ class REINFORCE(tr.nn.Module):
         return None
   
     def build1(self):
-        # policy params
+        # policy parameters
         self.in2hid = tr.nn.Linear(self.indim,self.stsize,bias=True)
+        self.hid2hid = tr.nn.Linear(self.stsize,self.stsize,bias=True)
         self.hid2val = tr.nn.Linear(self.stsize,1,bias=True)
         self.hid2pi = tr.nn.Linear(self.stsize,self.nactions,bias=True)
         # optimization
-        self.optiop = tr.optim.Adam(self.parameters(), 
+        self.optiop = tr.optim.RMSprop(self.parameters(), 
           lr=self.learnrate
         )
         return None
@@ -254,7 +255,8 @@ class REINFORCE(tr.nn.Module):
             phat: [batch,nactions]
         """
         xin = tr.Tensor(xin)
-        hact = self.in2hid(xin)
+        hact = self.in2hid(xin).relu()
+        # hact = self.hid2hid(hact).relu()
         vhat = self.hid2val(hact)
         pact = self.hid2pi(hact)
         return vhat,pact
@@ -267,30 +269,53 @@ class REINFORCE(tr.nn.Module):
         returns action [batch,1]
         """
         vhat,pact = self.forward(xin)
-        actions = Categorical(pact.softmax(-1))
-        return actions.sample()
+        # pism = pact.softmax(-1)
+        # if pism.min()<0.05:
+        #     pism = tr.Tensor([0.05,0.95])
+        # pidistr = Categorical(pism)
 
+        # actions = pidistr.sample()
+        if np.random.random() > 0.9:
+            return np.random.randint(2)
+        actions = pact.softmax(-1).argmax()
+        return actions
+
+    def eval(self,expD):
+        """ """
+        data = {}
+        ## entropy
+        vhat,pact = self.forward(expD['state'])
+        pra = pact.softmax(-1)
+        entropy = -1 * tr.sum(pra*pra.log2(),-1).mean()
+        data['entropy'] = entropy.detach().numpy()
+        ## value
+        returns = compute_returns(expD['reward']) 
+        data['delta'] = np.mean(returns - vhat.detach().numpy())
+        return data
 
     def update(self,expD):
         """ given dictionary of experience
             expD = {'reward':[tsteps],'state':[tsteps],...}
         """
         # assuming exp_dict is temporal:
-        returns = compute_returns(expD['reward']) ## NB 
+        returns = compute_returns(expD['reward'],gamma=0.95) ## NB 
         states,actions = expD['state'],tr.Tensor(expD['action'])
-        # los_pi,los_val = 0,0
-        for St,At,Gt in zip(states,actions,returns):
-            vhat,pact = self.forward(St)
-            pi = Categorical(pact.softmax(-1))
+        vhat,pact = self.forward(expD['state'])
+        los = 0
+        for vh,pa,At,Gt in zip(vhat,pact,actions,returns):
+            # pi = Categorical()
             ## compute "loss"
-            delta = Gt - vhat
-            los_pi = -delta*pi.log_prob(At)/len(states)      
-            los_val = tr.square(vhat - Gt)/len(states)
-            los = los_pi+los_val
-            # update step
-            self.optiop.zero_grad()
-            los.backward()
-            self.optiop.step()
+            delta = Gt - vh
+            # delta = Gt
+            # print(At)
+            los_pi = delta*tr.log(pa.softmax(-1)[At.numpy()])
+            los_val = tr.square(vh - Gt)
+            los += los_val-los_pi
+            # los = los_pi
+        # update step
+        self.optiop.zero_grad()
+        los.backward()
+        self.optiop.step()
             
         return None 
   
