@@ -3,6 +3,7 @@ import numpy
 import gym
 from collections import namedtuple
 import torch as tr
+from torch.distributions.categorical import Categorical
 import gym
 import numpy as np
 
@@ -27,7 +28,7 @@ class Task():
         self.rand_policy = lambda x: np.random.randint(self.aspace)
         self.max_ep_len = max_ep_len 
 
-    def play_ep(self,policy_fn=None):
+    def play_ep(self,pi=None):
         """ 
         given policy, return trajectory
             pi(s_t) -> a_t
@@ -35,8 +36,8 @@ class Task():
         """        
         # config env
         self.env.reset()
-        if type(policy_fn)==type(None):
-            policy_fn = self.rand_policy
+        if type(pi)==type(None):
+            pi = self.rand_policy
         # init loop vars
         done = False
         tstep = 0
@@ -48,8 +49,8 @@ class Task():
             tstep += 1 
             s_t = sp_t
             # sample a_t, observe transition
-            a_t = policy_fn(s_t)
-            env_out_t = self.env.step(a_t)
+            a_t = pi(s_t)
+            env_out_t = self.env.step(np.array(a_t))
             # preprocessing from Mnih d.t. apply
             sp_t,r_t,done,extra = env_out_t
             # collect transition 
@@ -64,7 +65,8 @@ class Task():
 
 
 class Buffer():
-    """ deque with record and sample method
+    """ 
+    deque with record and sample method
     """
 
     def __init__(self,mode,size):
@@ -195,95 +197,117 @@ class DQN(tr.nn.Module):
 
 
 
-class PolValNet(tr.nn.Module):
-
-    def __init__(self):
+class REINFORCE(tr.nn.Module):
+  
+    def __init__(self,indim=4,nactions=2,stsize=18,learnrate=0.005):
         super().__init__()
-        self.indim = 4 # 4 obs + 1 action
-        self.stsize = 20
-        self.num_actions = 2 # num actions
-        self.vhead_outdim = 1
-        self.build()
-        # 
-        self.optiop = tr.optim.Adam(self.parameters(),lr=0.001)
-        self.gamma=0.96
-
-    def build(self):
-        self.ff1 = tr.nn.Linear(self.indim,self.stsize)
-        self.ff2 = tr.nn.Linear(self.stsize,self.stsize)
-        self.ff3 = tr.nn.Linear(self.stsize,self.stsize)
-        # self.gru = tr.nn.GRU(self.stsize,self.stsize)
-        # self.init_rnn = tr.nn.Parameter(tr.rand(2,1,1,self.stsize),requires_grad=True)
-        self.value_head = tr.nn.Linear(self.stsize,self.vhead_outdim)
-        self.policy_head = tr.nn.Linear(self.stsize,self.num_actions)
-
-    def forward(self,obs):
-        """ 
-        takes batch of observations
-            obs : arr[batch,sfeat]
-        returns value of each action
-            value_hat_t : arr[batch,1]
-            pi_t : arr[batch,num_actions]
-        """
-        hid_act = tr.Tensor(obs)
-        # hid_act = obs_t
-        hid_act = self.ff1(hid_act)
-        hid_act = self.ff2(hid_act).relu()
-        hid_act = self.ff3(hid_act).relu()
-        value_act = self.value_head(hid_act)
-        policy_act = self.policy_head(hid_act)
-        return value_act,policy_act  
-
-    def reinforce_loss(self,exp):
-        """ format reinforce loss 
-        L = L_v + L_pi
-        L_v = MSE(G_t,vhat)
-        L_pi = sum_i [ log(pi(a_t)) * (G_t-vhat) ]
-        ** returns computed internally, so assume 
-        ** sequence of rewards preserve time structure
-        """
-        st = exp['state']
-        at = exp['action']
-        rewards = exp['reward']
-        stp1 = exp['state_tp1']
-        # forward prop: [nsamples,outdim]
-        vhatT,piT = self.forward()
-        ## compute returns [nsamples]
-        returnsT = compute_returns(rewards)
-        ## value loss [nsamples]
-        L_value = tr.sum(tr.square(returnsT-vhatT))
-        ## policy loss log(pi(a))
-        pi_stat = np.take_along_axis(piT,at[:,None],axis=1)
-        log_pi_stat = np.log(pi_stat)
-        L_policy = log_pi_stat*L_value
-        ## 
-        batch_loss = L_value+L_policy
-        return batch_loss
-
-    def train(self,exp):
-        """ 
-        exp is dict of arrs
-            {state,action,reward,state_tp1}
-        """
-        self.optiop.zero_grad()
-        loss = self.reinforce_loss(exp)
-        loss.backward()
-        self.optiop.step()
+        self.indim = indim
+        self.stsize = stsize
+        self.nactions = nactions
+        self.learnrate = learnrate
+        self.build1()
         return None
-
-    def softmax_policy_fn(self,epsilon):
-        """ lambda handle for softmax policy
+  
+    def build1(self):
+        # policy parameters
+        self.in2hid = tr.nn.Linear(self.indim,self.stsize,bias=True)
+        self.hid2hid = tr.nn.Linear(self.stsize,self.stsize,bias=True)
+        self.hid2val = tr.nn.Linear(self.stsize,1,bias=True)
+        self.hid2pi = tr.nn.Linear(self.stsize,self.nactions,bias=True)
+        # optimization
+        self.optiop = tr.optim.RMSprop(self.parameters(), 
+          lr=self.learnrate
+        )
+        return None
+    
+    def forward(self,xin):
+        """ 
+        xin [batch,dim]
+        returns activations of output layer
+            vhat: [batch,1]
+            phat: [batch,nactions]
         """
-        if np.random.random() > epsilon:
-            return lambda x: np.random.randint(2)
-        else:
-            def policy(x):
-                val,pi = self.forward(x)
-                pr_a = pi.softmax(-1)  
-                a_t = np.random.choice([0,1],p=pr_a.detach().numpy())
-                return a_t
-            return lambda x: policy(x)
+        xin = tr.Tensor(xin)
+        hact = self.in2hid(xin).relu()
+        # hact = self.hid2hid(hact).relu()
+        vhat = self.hid2val(hact)
+        pact = self.hid2pi(hact)
+        return vhat,pact
 
+    def act(self,xin):
+        """ 
+        xin [batch,stimdim]
+        used to interact with environment
+        forward prop, then apply policy
+        returns action [batch,1]
+        """
+        vhat,pact = self.forward(xin)
+        # pism = pact.softmax(-1)
+        # if pism.min()<0.05:
+        #     pism = tr.Tensor([0.05,0.95])
+        # pidistr = Categorical(pism)
+
+        # actions = pidistr.sample()
+        if np.random.random() > 0.9:
+            return np.random.randint(2)
+        actions = pact.softmax(-1).argmax()
+        return actions
+
+    def eval(self,expD):
+        """ """
+        data = {}
+        ## entropy
+        vhat,pact = self.forward(expD['state'])
+        pra = pact.softmax(-1)
+        entropy = -1 * tr.sum(pra*pra.log2(),-1).mean()
+        data['entropy'] = entropy.detach().numpy()
+        ## value
+        returns = compute_returns(expD['reward']) 
+        data['delta'] = np.mean(returns - vhat.detach().numpy())
+        return data
+
+    def update(self,expD):
+        """ given dictionary of experience
+            expD = {'reward':[tsteps],'state':[tsteps],...}
+        """
+        # assuming exp_dict is temporal:
+        returns = compute_returns(expD['reward'],gamma=0.95) ## NB 
+        states,actions = expD['state'],tr.Tensor(expD['action'])
+        vhat,pact = self.forward(expD['state'])
+        los = 0
+        for vh,pa,At,Gt in zip(vhat,pact,actions,returns):
+            # pi = Categorical()
+            ## compute "loss"
+            delta = Gt - vh
+            # delta = Gt
+            # print(At)
+            los_pi = delta*tr.log(pa.softmax(-1)[At.numpy()])
+            los_val = tr.square(vh - Gt)
+            los += los_val-los_pi
+            # los = los_pi
+        # update step
+        self.optiop.zero_grad()
+        los.backward()
+        self.optiop.step()
+            
+        return None 
+  
+  
+
+
+def compute_returns(rewards,gamma=1.0):
+    """ 
+    given rewards, compute discounted return
+    G_t = sum_k [g^k * r(t+k)]; k=0...T-t
+    """ 
+    T = len(rewards) 
+    returns = np.array([
+        np.sum(np.array(
+            rewards[t:])*np.array(
+            [gamma**i for i in range(T-t)]
+        )) for t in range(T)
+    ])
+    return returns
 
 
 def unpack_expL(expLoD):
@@ -295,25 +319,4 @@ def unpack_expL(expLoD):
     """
     expDoL = Experience(*zip(*expLoD))._asdict()
     return {k:np.array(v) for k,v in expDoL.items()}
-
-def compute_returns(rewards,gamma=0.9):
-    """ 
-    given rewards, compute discounted return
-    G_t = sum_k [g^k * r(t+k)]; k=0...T-t
-    """ 
-    T = len(rewards) 
-    ## explicit
-    # print(1)
-    # returns = np.ones(T)
-    # for t in np.arange(T):
-    #     discounts = np.array([gamma**k for k in np.arange(T-t)])
-    #     returns[t] = np.sum(rewards[t:] * discounts)
-    ## ugly but order magnitude faster
-    returns = np.array([
-        np.sum(np.array(
-            rewards[t:])*np.array(
-            [gamma**i for i in range(T-t)]
-        )) for t in range(T)
-    ])
-    return returns
 
