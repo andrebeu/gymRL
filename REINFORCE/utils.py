@@ -171,15 +171,10 @@ class REINFORCE(tr.nn.Module):
         vhat,pact = self.forward(expD['state'])
         los = 0
         for vh,pa,At,Gt in zip(vhat,pact,actions,returns):
-            # pi = Categorical()
-            ## compute "loss"
             delta = Gt - vh
-            # delta = Gt
-            # print(At)
             los_pi = delta*tr.log(pa.softmax(-1)[At.numpy()])
             los_val = tr.square(vh - Gt)
             los += los_val-los_pi
-            # los = los_pi
         # update step
         self.optiop.zero_grad()
         los.backward()

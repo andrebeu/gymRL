@@ -124,7 +124,7 @@ class REINFORCE(tr.nn.Module):
         """
         xin = tr.Tensor(xin)
         hact = self.in2hid(xin).relu()
-        # hact = self.hid2hid(hact).relu()
+        hact = self.hid2hid(hact).relu()
         vhat = self.hid2val(hact)
         pact = self.hid2pi(hact)
         return vhat,pact
@@ -137,15 +137,14 @@ class REINFORCE(tr.nn.Module):
         returns action [batch,1]
         """
         vhat,pact = self.forward(xin)
-        # pism = pact.softmax(-1)
+        pism = pact.softmax(-1)
         # if pism.min()<0.05:
         #     pism = tr.Tensor([0.05,0.95])
-        # pidistr = Categorical(pism)
-
-        # actions = pidistr.sample()
-        if np.random.random() > 0.9:
-            return np.random.randint(2)
-        actions = pact.softmax(-1).argmax()
+        pidistr = Categorical(pism)
+        actions = pidistr.sample()
+        # if np.random.random() > 0.9:
+        #     return np.random.randint(2)
+        # actions = pact.softmax(-1).argmax()
         return actions
 
     def eval(self,expD):
@@ -162,20 +161,20 @@ class REINFORCE(tr.nn.Module):
         return data
 
     def update(self,expD):
-        """ given dictionary of experience
-            expD = {'reward':[tsteps],'state':[tsteps],...}
+        """ REINFORCE update 
+        given expD trajectory:
+         expD = {'reward':[tsteps],'state':[tsteps],...}
         """
         # assuming exp_dict is temporal:
-        returns = compute_returns(expD['reward'],gamma=0.95) 
+        returns = compute_returns(expD['reward'],gamma=0.99) 
         states,actions = expD['state'],tr.Tensor(expD['action'])
         vhat,pact = self.forward(expD['state'])
-        los = 0
-        for vh,pa,At,Gt in zip(vhat,pact,actions,returns):
-            delta = Gt - vh
-            los_pi = delta*tr.log(pa.softmax(-1)[At.numpy()])
-            los_val = tr.square(vh - Gt)
-            los += los_val-los_pi
-            # los = los_pi
+        ## RL loss
+        delta = tr.Tensor(returns) - vhat.squeeze()
+        los_val = tr.square(delta).mean()
+        distr = Categorical(pact.softmax(-1))
+        los_pi = tr.mean(delta*distr.log_prob(actions))
+        los = los_val-los_pi
         # update step
         self.optiop.zero_grad()
         los.backward()
