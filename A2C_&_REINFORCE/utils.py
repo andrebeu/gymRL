@@ -94,13 +94,15 @@ def unpack_expL(expLoD):
 
 class REINFORCE(tr.nn.Module):
   
-    def __init__(self,indim=4,nactions=2,stsize=18,learnrate=0.005):
+    def __init__(self,indim=4,nactions=2,stsize=18,learnrate=0.005,TDupdate=True):
         super().__init__()
         self.indim = indim
         self.stsize = stsize
         self.nactions = nactions
         self.learnrate = learnrate
         self.build1()
+        self.gamma = 0.99
+        self.TDupdate = TDupdate
         return None
   
     def build1(self):
@@ -161,19 +163,23 @@ class REINFORCE(tr.nn.Module):
         return data
 
     def update(self,expD):
-        """ REINFORCE update 
+        """ REINFORCE and A2C updates
         given expD trajectory:
          expD = {'reward':[tsteps],'state':[tsteps],...}
         """
-        # assuming exp_dict is temporal:
-        returns = compute_returns(expD['reward'],gamma=0.99) 
         states,actions = expD['state'],tr.Tensor(expD['action'])
-        vhat,pact = self.forward(expD['state'])
-        ## RL loss
-        delta = tr.Tensor(returns) - vhat.squeeze()
-        los_val = tr.square(delta).mean()
+        vhat,pact = self.forward(states)
+        # form target
+        returns = compute_returns(expD['reward'],gamma=self.gamma) 
+        if self.TDupdate: # actor-critic loss
+            delta = tr.Tensor(expD['reward'][:-1])+self.gamma*vhat[1:].squeeze()-vhat[:-1].squeeze()
+            delta = tr.cat([delta,tr.Tensor([0])])
+        else: # REINFORCE
+            delta = tr.Tensor(returns) - vhat.squeeze()
+        # form RL loss
         distr = Categorical(pact.softmax(-1))
         los_pi = tr.mean(delta*distr.log_prob(actions))
+        los_val = tr.square(tr.Tensor(returns) - vhat.squeeze()).mean()
         los = los_val-los_pi
         # update step
         self.optiop.zero_grad()
